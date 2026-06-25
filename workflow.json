@@ -1,0 +1,501 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "kyc-intake",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "1ef87871-8198-4cdd-88c7-20f472e22d0e",
+      "name": "KYC Intake Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1424,
+        368
+      ],
+      "webhookId": "kyc-intake-001",
+      "notes": "Entry point. POST multipart/form-data with a 'profile' text field (stringified JSON) and an 'id_document' binary file. Responds immediately (Respond Mode: Immediately) so the client isn't blocked waiting for OCR + DB + Slack to finish."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parses the incoming multipart/form-data payload and performs robust integrity\n// checks BEFORE any data leaves this n8n instance. \n//\n// This upgraded version is highly flexible: it accepts nested, stringified JSON\n// 'profile' objects OR standard flat form-data fields, and accommodates different\n// binary file key names ('id_document' or 'file').\n\nconst items = $input.all();\nconst out = [];\n\nfor (const item of items) {\n  const executionId = $execution.id;\n  const receivedAt = new Date().toISOString();\n\n  // 1. Resolve the Profile Data (handling nested JSON OR flat form fields)\n  let profile = {};\n  const rawProfile = item.json.body?.profile ?? item.json.profile;\n\n  if (rawProfile) {\n    try {\n      profile = typeof rawProfile === 'string' ? JSON.parse(rawProfile) : rawProfile;\n    } catch (err) {\n      throw new Error(`Malformed 'profile' JSON payload: ${err.message}`);\n    }\n  } else {\n    // Graceful fallback to flat form-data keys if no unified 'profile' object exists\n    profile = {\n      applicant_id: item.json.body?.applicant_id ?? item.json.applicant_id,\n      email: item.json.body?.email ?? item.json.email,\n      phone: item.json.body?.phone ?? item.json.phone,\n      applicant_name: item.json.body?.applicant_name ?? item.json.applicant_name\n    };\n  }\n\n  // 2. Validate Required Identification Fields\n  if (!profile || !profile.applicant_id) {\n    throw new Error(\"Validation Failed: Missing 'applicant_id' (must be provided either inside a 'profile' JSON object or as a flat form field).\");\n  }\n\n  // 3. Resolve and Validate the Binary Payload (accepting 'id_document' or 'file')\n  const binaryKeys = item.binary ? Object.keys(item.binary) : [];\n  const targetBinaryKey = binaryKeys.find(key => key === 'id_document' || key === 'file');\n\n  if (!targetBinaryKey) {\n    throw new Error(\"Validation Failed: No valid binary document found. Please upload your ID file using the key 'id_document' or 'file'.\");\n  }\n\n  // Normalize binary key to 'id_document' for downstream nodes\n  const normalizedBinary = {};\n  normalizedBinary['id_document'] = item.binary[targetBinaryKey];\n\n  out.push({\n    json: {\n      execution_id: executionId,\n      received_at: receivedAt,\n      applicant_id: profile.applicant_id,\n      applicant_name: profile.applicant_name || null,\n      submitted_email: profile.email || null,\n      submitted_phone: profile.phone || null\n    },\n    binary: normalizedBinary\n  });\n}\n\nreturn out;"
+      },
+      "id": "b2e45bc3-7293-4b39-be92-4754cf723c76",
+      "name": "Parse & Validate Submission",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        368
+      ],
+      "notes": "Minimizes PII exposure downstream by extracting only applicant_id/email/phone instead of passing the whole raw form body forward. Throws on malformed/missing data so bad submissions never reach the OCR API."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "execution_id",
+              "type": "string",
+              "value": "={{ $('Parse & Validate Submission').item.json.execution_id }}"
+            },
+            {
+              "id": "a2",
+              "name": "applicant_id",
+              "type": "string",
+              "value": "={{ $('Parse & Validate Submission').item.json.applicant_id }}"
+            },
+            {
+              "id": "a3",
+              "name": "first_name",
+              "type": "string",
+              "value": "={{ $json.document.inference.prediction.given_names[0]?.value || '' }}"
+            },
+            {
+              "id": "a4",
+              "name": "last_name",
+              "type": "string",
+              "value": "={{ $json.document.inference.prediction.surnames[0]?.value || '' }}"
+            },
+            {
+              "id": "a5",
+              "name": "date_of_birth",
+              "type": "string",
+              "value": "={{ $json.document.inference.prediction.birth_date?.value || '' }}"
+            },
+            {
+              "id": "a6",
+              "name": "document_number",
+              "type": "string",
+              "value": "={{ $json.document.inference.prediction.document_number?.value || '' }}"
+            },
+            {
+              "id": "a7",
+              "name": "expiry_date",
+              "type": "string",
+              "value": "={{ $json.document.inference.prediction.expiry_date?.value || '' }}"
+            },
+            {
+              "id": "a8",
+              "name": "ocr_document_number_confidence",
+              "type": "number",
+              "value": "={{ $json.document.inference.prediction.document_number?.confidence || 0 }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1804b24a-6f6a-4d61-8253-2cbf1fb21497",
+      "name": "Normalize OCR Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -752,
+        272
+      ],
+      "notes": "Flattens Mindee's nested document.inference.prediction object into a clean, flat record. given_names/surnames are arrays in the Mindee schema (a person can have multiple), so we take index [0]. This is the only place in the workflow that should ever reference the raw Mindee response shape — everything downstream works off these clean field names."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deterministic business-rule validation on the normalized OCR output.\n// Three checks are enforced:\n//   1. Age >= 18 (calculated precisely, accounting for month/day - not just year subtraction)\n//   2. ID not expired\n//   3. document_number was actually extracted (low-confidence scans can return blank fields)\n\nconst data = $input.item.json;\n\nconst dob = new Date(data.date_of_birth);\nconst expiry = new Date(data.expiry_date);\nconst today = new Date();\n\n// Guard against unparsable dates returned by OCR (low-confidence extraction).\n// Treat as a flagged case rather than letting `false > false` style bugs slip through.\nif (isNaN(dob.getTime()) || isNaN(expiry.getTime())) {\n  return {\n    json: {\n      ...data,\n      applicant_age: null,\n      kyc_passed: false,\n      flag_reason: 'Unreadable date field(s) from OCR — manual review required'\n    }\n  };\n}\n\nlet age = today.getFullYear() - dob.getFullYear();\nconst hadBirthdayThisYear =\n  today.getMonth() > dob.getMonth() ||\n  (today.getMonth() === dob.getMonth() && today.getDate() >= dob.getDate());\nif (!hadBirthdayThisYear) age -= 1;\n\nconst isAdult = age >= 18;\nconst isValidID = expiry > today;\nconst hasDocumentNumber = !!data.document_number;\n\nconst kyc_passed = isAdult && isValidID && hasDocumentNumber;\n\nlet flag_reason = null;\nif (!hasDocumentNumber) flag_reason = 'Missing document number (low OCR confidence)';\nelse if (!isAdult) flag_reason = 'Underage';\nelse if (!isValidID) flag_reason = 'Expired ID';\n\nreturn {\n  json: {\n    ...data,\n    applicant_age: age,\n    kyc_passed,\n    flag_reason\n  }\n};\n"
+      },
+      "id": "e2b8355a-5a1e-4c04-a6d9-cb28ae405809",
+      "name": "KYC Validation Logic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -528,
+        272
+      ],
+      "notes": "Age check is calendar-accurate (month/day aware), not a naive year subtraction. Also rejects records with an unreadable date or a missing document number instead of silently passing them."
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "kyc_audit_log",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "execution_id": "={{ $json.execution_id }}",
+            "applicant_id": "={{ $json.applicant_id }}",
+            "document_number": "={{ $json.document_number }}",
+            "kyc_passed": "={{ $json.kyc_passed }}",
+            "flag_reason": "={{ $json.flag_reason }}",
+            "checked_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "754d45b8-700a-4867-ad0e-6073041936f9",
+      "name": "Log KYC Attempt (Audit Trail)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -304,
+        272
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "Writes every KYC attempt (pass or fail) to kyc_audit_log for compliance traceability, independent of whether the customer record itself gets inserted. onError is set to continueRegularOutput: a logging hiccup should never block a real applicant from being processed, but it will still show up as a failed sub-step in the n8n execution log."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{ $json.kyc_passed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "51f770d5-1d1c-4360-bbe3-1614e8a589a1",
+      "name": "Route: KYC Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -80,
+        272
+      ],
+      "notes": "True branch -> Verified customer insert. False branch -> manual review alert to #internal-control."
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "customers",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "first_name": "={{ $json.first_name }}",
+            "last_name": "={{ $json.last_name }}",
+            "date_of_birth": "={{ $json.date_of_birth }}",
+            "document_number": "={{ $json.document_number }}",
+            "status": "Verified",
+            "verified_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "e7afb46f-df2f-4fc7-837a-37aa7fa29917",
+      "name": "Insert Verified Customer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        144,
+        176
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "notes": "Only first_name, last_name, date_of_birth and document_number are persisted to the long-lived customers table — no raw OCR payload, no document image, no submitted_email/phone unless your schema explicitly needs them. Errors route to the error output instead of failing the whole execution silently."
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "internal-control"
+        },
+        "text": "=:warning: *KYC Manual Review Required*\\n*Reason:* {{ $json.flag_reason }}\\n\\n*Applicant Details*\\n• First Name: {{ $json.first_name }}\\n• Last Name: {{ $json.last_name }}\\n• Date of Birth: {{ $json.date_of_birth }}\\n• Document Number: {{ $json.document_number }}\\n• Applicant ID: {{ $json.applicant_id }}\\n\\nPlease review manually and update the applicant's status in the Customers table.",
+        "otherOptions": {}
+      },
+      "id": "b39b5507-ed6a-43ce-9773-65c1482fc450",
+      "name": "Alert #internal-control: Manual KYC Review Required",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        144,
+        368
+      ],
+      "webhookId": "518dfcf3-80a6-4034-80eb-a68d5b65da10",
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Business-rule failure (underage / expired ID / unreadable doc) — routed to #internal-control for a human compliance reviewer. Distinct from the technical-failure alerts below, which indicate an API/DB problem rather than a flagged applicant."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds a structured technical-failure record when the Mindee OCR call\n// fails outright (auth error, rate limit, timeout, corrupt image, etc.)\n// This is a SYSTEM failure, not a KYC business-rule flag.\n\nconst err = $input.item.json.error || $input.item.json;\nreturn {\n  json: {\n    execution_id: $('Parse & Validate Submission').item.json.execution_id,\n    applicant_id: $('Parse & Validate Submission').item.json.applicant_id,\n    failure_stage: 'OCR_EXTRACTION',\n    error_message: (err && err.message) ? err.message : JSON.stringify(err).slice(0, 500),\n    occurred_at: new Date().toISOString()\n  }\n};\n"
+      },
+      "id": "d94eecd5-51ac-44db-ba9e-9ee84ef04a69",
+      "name": "Format OCR Failure Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -752,
+        464
+      ],
+      "notes": "Runs only off the Mindee node's error output. Normalizes whatever error shape the HTTP node produced into a clean record for alerting."
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "internal-control"
+        },
+        "text": "=:rotating_light: *KYC Pipeline — Technical Failure*\\n*Stage:* OCR Extraction (Mindee API)\\n*Applicant ID:* {{ $json.applicant_id }}\\n*Error:* {{ $json.error_message }}\\n*Execution ID:* {{ $json.execution_id }}\\n*Time:* {{ $json.occurred_at }}\\n\\n_System error, not a compliance flag. The applicant's document could not be processed — needs re-submission or engineering follow-up._",
+        "otherOptions": {}
+      },
+      "id": "fd8cedc4-f2d0-4d6a-a275-91b29cbde2c2",
+      "name": "Alert: OCR API Failure",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        -528,
+        464
+      ],
+      "webhookId": "483a599d-8246-4ee7-b540-9c371cf4c38a",
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Technical alert distinct from the compliance/manual-review alert — lets engineering distinguish 'OCR API is down' from 'this specific applicant looks underage'."
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "internal-control"
+        },
+        "text": "=:rotating_light: *KYC Pipeline — Technical Failure*\\n*Stage:* Customer DB Insert\\n*Applicant ID:* {{ $json.applicant_id }}\\n*Document Number:* {{ $json.document_number }}\\n*Error:* {{ $json.error?.message || 'See n8n execution log for details' }}\\n\\n_This applicant PASSED KYC checks but was NOT saved to the customers table due to a database error. Needs immediate manual insert + DB health check._",
+        "otherOptions": {}
+      },
+      "id": "4208c153-20a7-4fcf-a7d1-deb488346c45",
+      "name": "Alert: Customer DB Insert Failed",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        368,
+        176
+      ],
+      "webhookId": "a7fc0efe-f5fe-468a-af6a-d97c348aa7a5",
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Critical: this fires when an applicant PASSED KYC but the DB write itself failed. Treated as higher urgency than the routine manual-review alert."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mindee.net/v1/products/mindee/international_id/v2/predict",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "mindeeInvoiceApi",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "document",
+              "inputDataFieldName": "id_document"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "e4d550d7-2f5a-4119-89f8-25613722a3a1",
+      "name": "Mindee OCR: International ID Extraction",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -976,
+        368
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "mindeeInvoiceApi": {
+          "id": "YOUR_MINDEE_CREDENTIAL_ID",
+          "name": "Mindee Invoice account"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "notes": "Calls Mindee's pre-built International ID v2 model (covers national IDs, driver's licenses and passports). Document is sent as multipart binary form data; the binary itself never gets logged or stored anywhere else in this workflow. Authentication is handled entirely through n8n's stored credential (mindeeInvoiceApi) — no API key is ever hardcoded in this workflow file. On a hard failure (auth, rate limit, malformed image) the error output (index 1) routes to the failure-handling branch instead of stopping the workflow."
+    }
+  ],
+  "connections": {
+    "KYC Intake Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate Submission",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate Submission": {
+      "main": [
+        [
+          {
+            "node": "Mindee OCR: International ID Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize OCR Data": {
+      "main": [
+        [
+          {
+            "node": "KYC Validation Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KYC Validation Logic": {
+      "main": [
+        [
+          {
+            "node": "Log KYC Attempt (Audit Trail)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log KYC Attempt (Audit Trail)": {
+      "main": [
+        [
+          {
+            "node": "Route: KYC Passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: KYC Passed?": {
+      "main": [
+        [
+          {
+            "node": "Insert Verified Customer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert #internal-control: Manual KYC Review Required",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Verified Customer": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Alert: Customer DB Insert Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format OCR Failure Payload": {
+      "main": [
+        [
+          {
+            "node": "Alert: OCR API Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mindee OCR: International ID Extraction": {
+      "main": [
+        [
+          {
+            "node": "Normalize OCR Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format OCR Failure Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "YOUR_INSTANCE_ID"
+  }
+}
