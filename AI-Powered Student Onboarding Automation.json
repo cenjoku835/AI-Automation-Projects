@@ -1,0 +1,571 @@
+{
+  "name": "My workflow 8",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "APTech Onboarding Session",
+        "formDescription": "Please fill in the following details",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "What is your name?",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "What is your age?",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Which course are you interested in?",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "AI Automation"
+                  },
+                  {
+                    "option": "Software Engineering"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "What is your email?",
+              "fieldType": "email",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "When would you like to start?",
+              "fieldType": "date",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        -272,
+        224
+      ],
+      "id": "96ed523e-7c43-4df4-96d3-69fb1cc1162a",
+      "name": "On form submission",
+      "webhookId": "a51b94cf-1d9a-43ab-9437-31b8d0b25be4"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "044e6dee-5495-4d93-8ced-61727905b800",
+              "name": "What is your name?",
+              "value": "={{ $json['What is your name?'] }}",
+              "type": "string"
+            },
+            {
+              "id": "3d10c8eb-1a34-40e5-941e-48a7b70f2dfa",
+              "name": "What is your age?",
+              "value": "={{ $json['What is your age?'] }}",
+              "type": "string"
+            },
+            {
+              "id": "ff518d79-0cf2-4671-88c3-5681e1b576c7",
+              "name": "Which course are you interested in?",
+              "value": "={{ $json['Which course are you interested in?'] }}",
+              "type": "string"
+            },
+            {
+              "id": "add98778-8745-401f-9974-10539c255e7c",
+              "name": "What is your email?",
+              "value": "={{ $json['What is your email?'] }}",
+              "type": "string"
+            },
+            {
+              "id": "13d0cdeb-fc37-4b1e-8b43-26ab5a38e8be",
+              "name": "When would you like to start?",
+              "value": "={{ $json['When would you like to start?'] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        176,
+        32
+      ],
+      "id": "9e17cd85-e4c7-4163-8411-dfefb252c5f5",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Draft a welcome message to {{ $json['What is your name?'] }} telling him that he has successfully registered for the ongoing APTech Onboarding Session. Tell him that he will recieve an additional email informing him of his onboarding  process at APTech",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a helpful assistant. Be professional "
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        400,
+        -80
+      ],
+      "id": "e8d5bf08-b052-4f01-b189-f0d39f1ad737",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        416,
+        144
+      ],
+      "id": "cbdb598a-36ca-4c15-b108-4c003b85e4bb",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "yjeHvWkRlO3Sh28x",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\t\"Subject\": \"String\",\n\t\"Body\": \"String\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        544,
+        144
+      ],
+      "id": "41898179-6a5d-4cc1-b178-e1daddfe04e2",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Edit Fields').item.json['What is your email?'] }}",
+        "subject": "={{ $json.output.Subject }}",
+        "message": "={{ $json.output.Body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        752,
+        32
+      ],
+      "id": "45023a8e-7a5b-4a93-8ace-050c53984ff9",
+      "name": "Send a message",
+      "webhookId": "949dad4b-4db3-40e1-bb65-907e7eee5693",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "1d398LwrYHN8zXje",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1701wIYJtGqt1X2RTyal9fKjfO1Bv5zXeH31bKYuiT7w",
+          "mode": "list",
+          "cachedResultName": "Class Exercise",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1701wIYJtGqt1X2RTyal9fKjfO1Bv5zXeH31bKYuiT7w/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 186268438,
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1701wIYJtGqt1X2RTyal9fKjfO1Bv5zXeH31bKYuiT7w/edit#gid=186268438"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $('Edit Fields').item.json['What is your name?'] }}",
+            "Date of Registration": "={{ $('Edit Fields').item.json['When would you like to start?'] }}",
+            "Email": "={{ $('Edit Fields').item.json['What is your email?'] }}",
+            "Course Registered On": "={{ $('Edit Fields').item.json['Which course are you interested in?'] }}",
+            "Date of Enrollment": "={{ $('Edit Fields').item.json['When would you like to start?'] }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date of Registration",
+              "displayName": "Date of Registration",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Course Registered On",
+              "displayName": "Course Registered On",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date of Enrollment",
+              "displayName": "Date of Enrollment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        976,
+        224
+      ],
+      "id": "95f6f13b-1674-4d8b-9bef-4471ef44ae47",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aTwxyG2z3zmfVNOr",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=I want you to generate using the pdf in our google drive to generate a terms and conditions message for{{ $('Edit Fields1').item.json['What is your name?'] }} informing him of his onboarding activities in APTech",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a helpful assistant. Be professional"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        400,
+        432
+      ],
+      "id": "141e211c-f4dd-4acd-a3dd-729b7a2806b4",
+      "name": "AI Agent1"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        368,
+        656
+      ],
+      "id": "40f4d64d-d3e0-4409-9386-e6b6ecece5bc",
+      "name": "Google Gemini Chat Model1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "yjeHvWkRlO3Sh28x",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\t\"Subject\": \"String\",\n\t\"Body\": \"String\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        624,
+        640
+      ],
+      "id": "fca0fd41-6cd7-4bac-8cd3-d0faf770a7c3",
+      "name": "Structured Output Parser1"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Edit Fields1').item.json['What is your email?'] }}",
+        "subject": "={{ $json.output.Subject }}",
+        "message": "={{ $json.output.Body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        752,
+        432
+      ],
+      "id": "e62a3b45-4a24-4cb1-aae5-99ff6af3b488",
+      "name": "Send a message1",
+      "webhookId": "949dad4b-4db3-40e1-bb65-907e7eee5693",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "1d398LwrYHN8zXje",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "1xxNfX-Z2gx2w6hxBuYysYHHGsJ3GKhSX",
+          "mode": "list",
+          "cachedResultName": "aptech_student_onboarding_terms.pdf",
+          "cachedResultUrl": "https://drive.google.com/file/d/1xxNfX-Z2gx2w6hxBuYysYHHGsJ3GKhSX/view?usp=drivesdk"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        176,
+        432
+      ],
+      "id": "0bc23bdf-5855-4299-b790-328984ded569",
+      "name": "Download file",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "c2UH18WIXQDKOMEP",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ed8a8c69-d9a3-4d9e-8ed6-cb72d9de84b5",
+              "name": "What is your name?",
+              "value": "={{ $json['What is your name?'] }}",
+              "type": "string"
+            },
+            {
+              "id": "8a19828e-628a-49d2-ad61-f2c5933983e4",
+              "name": "What is your email?",
+              "value": "={{ $json['What is your email?'] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -48,
+        432
+      ],
+      "id": "c74b2373-d5fb-4281-9d91-5826e469b075",
+      "name": "Edit Fields1"
+    }
+  ],
+  "pinData": {
+    "On form submission": [
+      {
+        "json": {
+          "What is your name?": "Isaac Ifechi",
+          "What is your age?": "17",
+          "Which course are you interested in?": "AI Automation",
+          "What is your email?": "Nuelslite@gmail.com",
+          "When would you like to start?": "2026-06-27",
+          "submittedAt": "2026-06-27T11:15:29.337-04:00",
+          "formMode": "test"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent1": {
+      "main": [
+        [
+          {
+            "node": "Send a message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser1": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message1": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download file": {
+      "main": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "Download file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "0532aee9-7f3a-4541-bddd-4aa7a845debc",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "058980644543be91d774e5fd8fb848ae0fa1dfbc217fa1b757f8e0c5399d3b18"
+  },
+  "id": "JNigJbpFMH5eRgT2",
+  "tags": []
+}
