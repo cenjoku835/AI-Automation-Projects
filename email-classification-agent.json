@@ -1,0 +1,634 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {}
+      },
+      "id": "315d6454-bc27-48f0-b80d-91ed5b871921",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1696,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const emailData = $input.first().json;\n\nconst subject = (emailData.subject || emailData.payload?.headers?.find(h => h.name === 'Subject')?.value || '').toLowerCase();\nconst body = (emailData.snippet || emailData.body || emailData.textPlain || '').toLowerCase();\nconst sender = emailData.from || emailData.payload?.headers?.find(h => h.name === 'From')?.value || '';\nconst date = emailData.date || emailData.internalDate || new Date().toISOString();\nconst messageId = emailData.id || emailData.messageId || '';\n\nconst combined = subject + ' ' + body;\n\nconst keywords = {\n  Sales: [\n    'quote', 'pricing', 'proposal', 'purchase', 'buy', 'order', 'discount',\n    'demo', 'trial', 'subscription', 'upgrade', 'renewal', 'contract',\n    'deal', 'offer', 'revenue', 'prospect', 'lead', 'crm', 'opportunity'\n  ],\n  'Customer Service': [\n    'support', 'help', 'issue', 'problem', 'complaint', 'refund', 'return',\n    'broken', 'error', 'not working', 'ticket', 'request', 'feedback',\n    'dissatisfied', 'unhappy', 'cancel', 'cancellation', 'bug', 'fix'\n  ],\n  HR: [\n    'hire', 'hiring', 'job', 'application', 'resume', 'cv', 'interview',\n    'onboarding', 'payroll', 'leave', 'vacation', 'sick', 'benefits',\n    'employee', 'staff', 'recruitment', 'position', 'career', 'hr',\n    'human resources', 'performance review', 'training', 'policy'\n  ],\n  Finance: [\n    'invoice', 'payment', 'billing', 'receipt', 'tax', 'expense',\n    'reimbursement', 'budget', 'accounting', 'financial', 'wire',\n    'bank', 'transaction', 'audit', 'balance', 'statement', 'po number',\n    'purchase order', 'accounts payable', 'accounts receivable'\n  ],\n  Operations: [\n    'logistics', 'shipping', 'delivery', 'supply chain', 'vendor',\n    'supplier', 'warehouse', 'inventory', 'procurement', 'facility',\n    'maintenance', 'equipment', 'schedule', 'process', 'operations',\n    'infrastructure', 'dispatch', 'tracking', 'fulfillment'\n  ]\n};\n\nconst scores = {};\nfor (const [dept, words] of Object.entries(keywords)) {\n  scores[dept] = 0;\n  for (const word of words) {\n    if (combined.includes(word)) {\n      scores[dept] += 1;\n    }\n  }\n}\n\nconst maxScore = Math.max(...Object.values(scores));\nlet department = 'Other';\n\nif (maxScore > 0) {\n  department = Object.entries(scores).find(([, v]) => v === maxScore)[0];\n}\n\nreturn [{\n  json: {\n    messageId,\n    sender,\n    subject: emailData.subject || emailData.payload?.headers?.find(h => h.name === 'Subject')?.value || '',\n    body: emailData.snippet || emailData.textPlain || '',\n    date,\n    department,\n    scores,\n    classificationMethod: 'rule-based',\n    classifiedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "332aede0-defa-4b93-88dc-fd9bfd1534a7",
+      "name": "Rule-Based Classifier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1472,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-low-confidence",
+              "leftValue": "={{ $json.department }}",
+              "rightValue": "Other",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0d390301-d1e8-4297-9641-806b2e1dda64",
+      "name": "Needs AI Classification?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1248,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Classify this email into one of these departments: Sales, Customer Service, HR, Finance, Operations, or Other. Reply with ONLY the department name.\n\nEmail Subject: {{ $json.subject }}\nEmail Body: {{ $json.body }}\nFrom: {{ $json.sender }}"
+      },
+      "id": "a6031a0c-b94c-44c9-862e-4e918420c3ae",
+      "name": "Build AI Prompt",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -1024,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiResponse = $input.first().json;\nconst previousData = $('Needs AI Classification?').first().json;\n\nconst rawText = aiResponse.text || aiResponse.response || aiResponse.output || '';\nconst cleaned = rawText.trim().replace(/[^a-zA-Z ]/g, '');\n\nconst validDepts = ['Sales', 'Customer Service', 'HR', 'Finance', 'Operations', 'Other'];\nlet department = 'Other';\n\nfor (const dept of validDepts) {\n  if (cleaned.toLowerCase().includes(dept.toLowerCase())) {\n    department = dept;\n    break;\n  }\n}\n\nreturn [{\n  json: {\n    ...previousData,\n    department,\n    classificationMethod: 'ai',\n    aiRawResponse: rawText,\n    classifiedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "dd835506-db70-4b39-ad4b-a91c3f1747f1",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -672,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ruleData = $input.first().json;\nreturn [{ json: { ...ruleData } }];"
+      },
+      "id": "4415d756-1eae-454d-bce8-73aed0f3ebf8",
+      "name": "Pass Rule Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -672,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "options": {}
+      },
+      "id": "d4fd81c0-bdac-4f34-b63f-09e7e7e9e9e3",
+      "name": "Merge Classification",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -448,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.department }}",
+                    "rightValue": "Sales",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Sales"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.department }}",
+                    "rightValue": "Customer Service",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Customer Service"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.department }}",
+                    "rightValue": "HR",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "HR"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.department }}",
+                    "rightValue": "Finance",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Finance"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.department }}",
+                    "rightValue": "Operations",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Operations"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "8c1263a9-5edb-432d-a6b3-566a3fd578e4",
+      "name": "Route by Department",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -224,
+        416
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "sales-team@yourcompany.com",
+        "subject": "=📧 [SALES] {{ $json.subject }}",
+        "emailType": "text",
+        "message": "=A new email has been classified as SALES.\n\nFrom: {{ $json.sender }}\nSubject: {{ $json.subject }}\nReceived: {{ $json.date }}\nClassification Method: {{ $json.classificationMethod }}\n\n--- Email Preview ---\n{{ $json.body }}\n\nPlease review and respond accordingly.",
+        "options": {}
+      },
+      "id": "099c4ceb-a5d6-40d6-b055-35609e70dae1",
+      "name": "Notify Sales Team",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "afff1c92-ffff-48d2-89f4-157b09a4cc26"
+    },
+    {
+      "parameters": {
+        "sendTo": "support@yourcompany.com",
+        "subject": "=🎧 [CUSTOMER SERVICE] {{ $json.subject }}",
+        "emailType": "text",
+        "message": "=A new email has been classified as CUSTOMER SERVICE.\n\nFrom: {{ $json.sender }}\nSubject: {{ $json.subject }}\nReceived: {{ $json.date }}\nClassification Method: {{ $json.classificationMethod }}\n\n--- Email Preview ---\n{{ $json.body }}\n\nPlease review and respond accordingly.",
+        "options": {}
+      },
+      "id": "7f41744d-4be3-4989-8877-0cbe492b6633",
+      "name": "Notify Customer Service",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        0,
+        192
+      ],
+      "webhookId": "83aa2c00-c858-4899-8a08-a3ad958a0945"
+    },
+    {
+      "parameters": {
+        "sendTo": "hr@yourcompany.com",
+        "subject": "=👥 [HR] {{ $json.subject }}",
+        "emailType": "text",
+        "message": "=A new email has been classified as HUMAN RESOURCES.\n\nFrom: {{ $json.sender }}\nSubject: {{ $json.subject }}\nReceived: {{ $json.date }}\nClassification Method: {{ $json.classificationMethod }}\n\n--- Email Preview ---\n{{ $json.body }}\n\nPlease review and respond accordingly.",
+        "options": {}
+      },
+      "id": "d3cb4cb6-dfcf-4f84-8adb-b2fb765ddfa2",
+      "name": "Notify HR Team",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        0,
+        384
+      ],
+      "webhookId": "9ef67317-1289-4752-852f-eb6845be675e"
+    },
+    {
+      "parameters": {
+        "sendTo": "finance@yourcompany.com",
+        "subject": "=💰 [FINANCE] {{ $json.subject }}",
+        "emailType": "text",
+        "message": "=A new email has been classified as FINANCE.\n\nFrom: {{ $json.sender }}\nSubject: {{ $json.subject }}\nReceived: {{ $json.date }}\nClassification Method: {{ $json.classificationMethod }}\n\n--- Email Preview ---\n{{ $json.body }}\n\nPlease review and respond accordingly.",
+        "options": {}
+      },
+      "id": "1f62fec5-b91a-44de-bb9d-134fbdd2798d",
+      "name": "Notify Finance Team",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        0,
+        576
+      ],
+      "webhookId": "1e6204ac-a552-466c-9025-c1696e3ea306"
+    },
+    {
+      "parameters": {
+        "sendTo": "operations@yourcompany.com",
+        "subject": "=⚙️ [OPERATIONS] {{ $json.subject }}",
+        "emailType": "text",
+        "message": "=A new email has been classified as OPERATIONS.\n\nFrom: {{ $json.sender }}\nSubject: {{ $json.subject }}\nReceived: {{ $json.date }}\nClassification Method: {{ $json.classificationMethod }}\n\n--- Email Preview ---\n{{ $json.body }}\n\nPlease review and respond accordingly.",
+        "options": {}
+      },
+      "id": "a325be80-81e6-4f6d-a039-cde4afd65cf9",
+      "name": "Notify Operations Team",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        0,
+        768
+      ],
+      "webhookId": "0927938c-e33b-4cfc-b98e-879d14bcda73"
+    },
+    {
+      "parameters": {
+        "sendTo": "admin@yourcompany.com",
+        "subject": "=❓ [UNCLASSIFIED] {{ $json.subject }}",
+        "emailType": "text",
+        "message": "=An email could not be confidently classified and has been routed to OTHER.\n\nFrom: {{ $json.sender }}\nSubject: {{ $json.subject }}\nReceived: {{ $json.date }}\nClassification Method: {{ $json.classificationMethod }}\n\n--- Email Preview ---\n{{ $json.body }}\n\nPlease review manually and forward to the correct department.",
+        "options": {}
+      },
+      "id": "3632f4e8-4db2-42bf-8a07-a4b095546a6b",
+      "name": "Notify Admin (Other)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        0,
+        960
+      ],
+      "webhookId": "04bbd1a4-aba7-48aa-af27-bf1544236dad"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Email Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.classifiedAt }}",
+            "Message ID": "={{ $json.messageId }}",
+            "Sender": "={{ $json.sender }}",
+            "Subject": "={{ $json.subject }}",
+            "Department": "={{ $json.department }}",
+            "Classification Method": "={{ $json.classificationMethod }}",
+            "Email Preview": "={{ $json.body.substring(0, 300) }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "559ad8f7-ede0-4151-973e-8d8e6ca64280",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        224,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        -1104,
+        560
+      ],
+      "id": "8a0e7e6b-cbc3-4a51-9702-1a097451f10f",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "aIsmKZiudkcfaoQx",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Rule-Based Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rule-Based Classifier": {
+      "main": [
+        [
+          {
+            "node": "Needs AI Classification?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs AI Classification?": {
+      "main": [
+        [
+          {
+            "node": "Build AI Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pass Rule Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Prompt": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pass Rule Result": {
+      "main": [
+        [
+          {
+            "node": "Merge Classification",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Classification": {
+      "main": [
+        [
+          {
+            "node": "Route by Department",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Department": {
+      "main": [
+        [
+          {
+            "node": "Notify Sales Team",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Customer Service",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify HR Team",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Finance Team",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Operations Team",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Admin (Other)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Sales Team": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Customer Service": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify HR Team": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Finance Team": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Operations Team": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Admin (Other)": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Build AI Prompt",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "2af9cee7e0a174f5b690e0a925dc0fe21d624bfa2b661b7afe154d05f312d3c7"
+  }
+}
