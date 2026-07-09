@@ -1,4 +1,4 @@
-# Chinecherem Emmanuel (Njoku Chinecherem Emmanuel)
+# Chinecherem Emmanuel Njoku
 
 **AI Automation Engineer | IT Instructor | PGD Computer Science Candidate**
 
